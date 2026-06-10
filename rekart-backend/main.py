@@ -2,11 +2,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Any
 import json, datetime
+from datetime import date, timedelta
 
 app = FastAPI(title="Rekart Mock Backend")
 
 # In-memory store (replace with SQLite in Phase 3)
-store = {"products": [], "orders": [], "sync_log": []}
+store = {"products": [], "orders": [], "sync_log": [], "subscriptions": [], "deliveries": []}
 
 class SyncPayload(BaseModel):
     shop: str
@@ -50,3 +51,73 @@ def get_orders():
 @app.get("/rekart/sync-log")
 def get_sync_log():
     return {"log": store["sync_log"]}
+
+
+@app.post("/shopify/sync/subscription")
+def sync_subscription(payload: dict):
+    contract = payload.get("contract", {})
+    topic = payload.get("topic", "")
+    shop = payload.get("shop", "")
+
+    contract_id = contract.get("admin_graphql_api_id") or contract.get("id")
+
+    existing = next((s for s in store["subscriptions"] if s["shopify_contract_id"] == str(contract_id)), None)
+
+    if existing:
+        if "activate" in topic:
+            existing["status"] = "ACTIVE"
+        elif "pause" in topic:
+            existing["status"] = "PAUSED"
+        elif "cancel" in topic:
+            existing["status"] = "CANCELLED"
+        existing["updated_at"] = datetime.datetime.utcnow().isoformat()
+    else:
+        new_record = {
+            "id": len(store["subscriptions"]) + 1,
+            "shopify_contract_id": str(contract_id),
+            "shopify_customer_id": str(contract.get("customer_id", "")),
+            "selling_plan_id": str(contract.get("selling_plan_id", "")),
+            "interval": "DAY",
+            "interval_count": 1,
+            "next_run_date": (date.today() + timedelta(days=1)).isoformat(),
+            "status": "ACTIVE",
+            "shop": shop,
+            "created_at": datetime.datetime.utcnow().isoformat(),
+            "updated_at": datetime.datetime.utcnow().isoformat(),
+        }
+        store["subscriptions"].append(new_record)
+
+    return {"received": True, "topic": topic, "contract_id": contract_id}
+
+
+@app.post("/rekart/run-daily-job")
+def run_daily_job():
+    today = date.today().isoformat()
+    dispatched = []
+
+    for sub in store["subscriptions"]:
+        if sub["status"] == "ACTIVE" and sub["next_run_date"] <= today:
+            delivery = {
+                "id": len(store["deliveries"]) + 1,
+                "contract_id": sub["id"],
+                "shopify_contract_id": sub["shopify_contract_id"],
+                "delivery_date": today,
+                "status": "PENDING",
+                "created_at": datetime.datetime.utcnow().isoformat(),
+            }
+            store["deliveries"].append(delivery)
+            next_date = date.fromisoformat(sub["next_run_date"]) + timedelta(days=1)
+            sub["next_run_date"] = next_date.isoformat()
+            dispatched.append(delivery)
+
+    return {"date": today, "deliveries_created": len(dispatched), "deliveries": dispatched}
+
+
+@app.get("/rekart/subscriptions")
+def get_subscriptions():
+    return {"subscriptions": store["subscriptions"], "count": len(store["subscriptions"])}
+
+
+@app.get("/rekart/deliveries")
+def get_deliveries():
+    return {"deliveries": store["deliveries"], "count": len(store["deliveries"])}

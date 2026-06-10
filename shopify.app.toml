@@ -23,9 +23,25 @@ api_version = "2026-07"
   uri = "/webhooks/orders/create"
   topics = [ "orders/create" ]
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/subscription_contracts/create"
+  topics = [ "subscription_contracts/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/subscription_contracts/activate"
+  topics = [ "subscription_contracts/activate" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/subscription_contracts/pause"
+  topics = [ "subscription_contracts/pause" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/subscription_contracts/cancel"
+  topics = [ "subscription_contracts/cancel" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,write_products,read_metaobjects,write_metaobjects,read_metaobject_definitions,write_metaobject_definitions,read_orders,read_inventory,read_customers"
+scopes = "read_products,write_products,read_metaobjects,write_metaobjects,read_metaobject_definitions,write_metaobject_definitions,read_orders,write_orders,read_inventory,read_customers,write_purchase_options,write_own_subscription_contracts"
 
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
