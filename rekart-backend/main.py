@@ -1,94 +1,76 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from typing import Any
-import json, datetime
+from typing import Optional
+import datetime
 from datetime import date, timedelta
 
-app = FastAPI(title="Rekart Mock Backend")
+app = FastAPI(title="Rekart Backend - Shopify POC")
 
-# In-memory store (replace with SQLite in Phase 3)
-store = {"products": [], "orders": [], "sync_log": [], "subscriptions": [], "deliveries": []}
+store = {
+    "subscriptions": [],
+    "deliveries": [],
+    "sync_log": []
+}
 
-class SyncPayload(BaseModel):
-    shop: str
-    synced_at: str = None
-    data: Any
+# ── Health ──────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()}
 
-@app.post("/shopify/sync/products")
-def sync_products(payload: dict):
-    products = payload.get("products", [])
-    store["products"] = products
-    store["sync_log"].append({"type": "products", "count": len(products), "at": datetime.datetime.utcnow().isoformat()})
-    return {"received": True, "type": "products", "count": len(products)}
+# ── Subscribe redirect landing page ─────────────────────────────────────────
 
-@app.post("/shopify/sync/orders")
-def sync_orders(payload: dict):
-    incoming_orders = payload.get("orders", [])
-    existing_ids = {o["shopify_order_id"] for o in store["orders"]}
-    new_orders = [o for o in incoming_orders if o["shopify_order_id"] not in existing_ids]
+@app.get("/subscribe", response_class=HTMLResponse)
+def subscribe_landing(shop: str, product_id: str, plan: str = "daily"):
+    """
+    Customer lands here after clicking Subscribe on Shopify storefront.
+    In production this would be a full checkout page.
+    For POC it confirms the subscription and creates the record.
+    """
+    # Create subscription record
+    sub_id = len(store["subscriptions"]) + 1
+    new_sub = {
+        "id": sub_id,
+        "shop": shop,
+        "shopify_product_id": product_id,
+        "plan": plan,
+        "interval": "DAY",
+        "interval_count": 1,
+        "next_run_date": (date.today() + timedelta(days=1)).isoformat(),
+        "status": "ACTIVE",
+        "created_at": datetime.datetime.utcnow().isoformat(),
+        "updated_at": datetime.datetime.utcnow().isoformat(),
+    }
+    store["subscriptions"].append(new_sub)
 
-    store["orders"].extend(new_orders)
-    store["sync_log"].append({
-        "type": "orders",
-        "count": len(new_orders),
-        "at": datetime.datetime.utcnow().isoformat()
-    })
+    return f"""
+    <html>
+      <body style="font-family: sans-serif; max-width: 600px; margin: 60px auto; text-align: center;">
+        <h1>🥛 Subscription Confirmed!</h1>
+        <p>Your daily milk delivery subscription has been created.</p>
+        <table style="margin: 20px auto; text-align: left; border-collapse: collapse;">
+          <tr><td style="padding: 8px; font-weight: bold;">Subscription ID</td><td style="padding: 8px;">#{sub_id}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold;">Shop</td><td style="padding: 8px;">{shop}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold;">Product ID</td><td style="padding: 8px;">{product_id}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold;">Plan</td><td style="padding: 8px;">Daily Delivery</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold;">First Delivery</td><td style="padding: 8px;">{new_sub['next_run_date']}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold;">Status</td><td style="padding: 8px; color: green;">ACTIVE</td></tr>
+        </table>
+        <p style="margin-top: 30px;"><a href="/rekart/subscriptions" style="color: #2c6e49;">View all subscriptions →</a></p>
+      </body>
+    </html>
+    """
 
-    return {"received": True, "type": "orders", "count": len(new_orders)}
+# ── Subscription management ──────────────────────────────────────────────────
 
-@app.get("/rekart/products")
-def get_products():
-    return {"products": store["products"], "count": len(store["products"])}
+@app.get("/rekart/subscriptions")
+def get_subscriptions():
+    return {"subscriptions": store["subscriptions"], "count": len(store["subscriptions"])}
 
-@app.get("/rekart/orders")
-def get_orders():
-    return {"orders": store["orders"], "count": len(store["orders"])}
-
-@app.get("/rekart/sync-log")
-def get_sync_log():
-    return {"log": store["sync_log"]}
-
-
-@app.post("/shopify/sync/subscription")
-def sync_subscription(payload: dict):
-    contract = payload.get("contract", {})
-    topic = payload.get("topic", "")
-    shop = payload.get("shop", "")
-
-    contract_id = contract.get("admin_graphql_api_id") or contract.get("id")
-
-    existing = next((s for s in store["subscriptions"] if s["shopify_contract_id"] == str(contract_id)), None)
-
-    if existing:
-        if "activate" in topic:
-            existing["status"] = "ACTIVE"
-        elif "pause" in topic:
-            existing["status"] = "PAUSED"
-        elif "cancel" in topic:
-            existing["status"] = "CANCELLED"
-        existing["updated_at"] = datetime.datetime.utcnow().isoformat()
-    else:
-        new_record = {
-            "id": len(store["subscriptions"]) + 1,
-            "shopify_contract_id": str(contract_id),
-            "shopify_customer_id": str(contract.get("customer_id", "")),
-            "selling_plan_id": str(contract.get("selling_plan_id", "")),
-            "interval": "DAY",
-            "interval_count": 1,
-            "next_run_date": (date.today() + timedelta(days=1)).isoformat(),
-            "status": "ACTIVE",
-            "shop": shop,
-            "created_at": datetime.datetime.utcnow().isoformat(),
-            "updated_at": datetime.datetime.utcnow().isoformat(),
-        }
-        store["subscriptions"].append(new_record)
-
-    return {"received": True, "topic": topic, "contract_id": contract_id}
-
+@app.get("/rekart/deliveries")
+def get_deliveries():
+    return {"deliveries": store["deliveries"], "count": len(store["deliveries"])}
 
 @app.post("/rekart/run-daily-job")
 def run_daily_job():
@@ -99,8 +81,9 @@ def run_daily_job():
         if sub["status"] == "ACTIVE" and sub["next_run_date"] <= today:
             delivery = {
                 "id": len(store["deliveries"]) + 1,
-                "contract_id": sub["id"],
-                "shopify_contract_id": sub["shopify_contract_id"],
+                "subscription_id": sub["id"],
+                "shop": sub["shop"],
+                "shopify_product_id": sub["shopify_product_id"],
                 "delivery_date": today,
                 "status": "PENDING",
                 "created_at": datetime.datetime.utcnow().isoformat(),
@@ -110,14 +93,32 @@ def run_daily_job():
             sub["next_run_date"] = next_date.isoformat()
             dispatched.append(delivery)
 
-    return {"date": today, "deliveries_created": len(dispatched), "deliveries": dispatched}
+    return {
+        "date": today,
+        "deliveries_created": len(dispatched),
+        "deliveries": dispatched
+    }
 
+@app.post("/rekart/subscriptions/{sub_id}/pause")
+def pause_subscription(sub_id: int):
+    sub = next((s for s in store["subscriptions"] if s["id"] == sub_id), None)
+    if not sub:
+        return {"error": "Not found"}, 404
+    sub["status"] = "PAUSED"
+    sub["updated_at"] = datetime.datetime.utcnow().isoformat()
+    return {"status": "paused", "subscription": sub}
 
-@app.get("/rekart/subscriptions")
-def get_subscriptions():
-    return {"subscriptions": store["subscriptions"], "count": len(store["subscriptions"])}
+@app.post("/rekart/subscriptions/{sub_id}/cancel")
+def cancel_subscription(sub_id: int):
+    sub = next((s for s in store["subscriptions"] if s["id"] == sub_id), None)
+    if not sub:
+        return {"error": "Not found"}, 404
+    sub["status"] = "CANCELLED"
+    sub["updated_at"] = datetime.datetime.utcnow().isoformat()
+    return {"status": "cancelled", "subscription": sub}
 
+# ── Sync log ─────────────────────────────────────────────────────────────────
 
-@app.get("/rekart/deliveries")
-def get_deliveries():
-    return {"deliveries": store["deliveries"], "count": len(store["deliveries"])}
+@app.get("/rekart/sync-log")
+def get_sync_log():
+    return {"log": store["sync_log"]}

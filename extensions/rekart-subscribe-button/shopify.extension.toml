@@ -1,0 +1,10 @@
+name = "Rekart Subscribe Button"
+handle = "rekart-subscribe-button"
+type = "theme"
+
+[settings]
+  [[settings.fields]]
+  key = "rekart_base_url"
+  type = "text"
+  name = "Rekart Base URL"
+  default = "http://localhost:8000"
